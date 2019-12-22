@@ -1,0 +1,64 @@
+#!/bin/bash
+
+# Colors & helpers
+GREEN="\033[0;32m"
+RED="\033[0;31m"
+CLEAR="\033[0m"
+
+green() { echo -e "${GREEN}"$@"${CLEAR}"; }
+red() { >&2 echo -e "${RED}"$@"${CLEAR}"; }
+
+# Binary paths
+SIGNING_BIN="$HOME/.platformio/packages/framework-arduinoespressif8266/tools/signing.py"
+UPLOADER_BIN="$HOME/.platformio/packages/framework-arduinoespressif8266/tools/espota.py"
+
+# Parse arguments
+while (( "$#" )); do
+  case "$1" in
+    --ota-sign-private)
+      OTA_PRIVKEY=$2
+      shift 2
+      ;;
+    --upload-built-binary)
+      OTA_BIN=$2
+      shift 2
+      ;;
+    *)
+      BYPASS_PARAMS="$BYPASS_PARAMS $1"
+      shift
+      ;;
+  esac
+done
+
+# Check existence and permissions on signing.py script from pio package
+if ! [[ -x $SIGNING_BIN ]]
+then
+    red "[SIGN] signing.py is not found or it is not executable\n"
+    exit 1
+fi
+
+# Check existence and permissions on espota.py script from pio package
+if ! [[ -x $UPLOADER_BIN ]]
+then
+    red "[SIGN] espota.py is not found or it is not executable\n"
+    exit 1
+fi
+
+# Create temp signed file
+SIGNED_FILE_TMP=`mktemp --dry-run`
+
+# Ahh, this if statement is awful, because signing script's developers decided not to exit with code 1 in case of signing failure idk why :(
+# https://github.com/esp8266/Arduino/blob/master/doc/ota_updates/readme.rst#automatic-signing----only-available-on-linux-and-mac
+# Moreover, signing.py is also puts the "successfull signed" message into stderr
+SIGN_OUT=$($SIGNING_BIN --mode=sign --bin $OTA_BIN --out $SIGNED_FILE_TMP --privatekey $OTA_PRIVKEY 2>&1 >/dev/null)
+
+if [[ "$SIGN_OUT" != "Signed binary: $SIGNED_FILE_TMP" ]];
+then
+  red "[SIGN] Signing script failed, please ensure that your keys are readable and upload_flags are correct"
+  exit 1
+fi
+
+green "[SIGN] Firmware binary successfully signed (^・x・^), calling espota..."
+
+# Call espota.py then remove signed file
+($UPLOADER_BIN -f $SIGNED_FILE_TMP $BYPASS_PARAMS && rm $SIGNED_FILE_TMP) || (rm $SIGNED_FILE_TMP; exit 1)
